@@ -1,0 +1,43 @@
+PREVIOUS CODE
+-Put together a report for threhsholding
+
+UNDERSTANDING CODE
+-Understand the code better
+-Understand the parameters of temperature and context window
+-How does the window length work? does it implement padding or read into previous names?
+
+LITERATURE
+-Has any of this stuff been done before? 
+-How have people played with microGPT or similar before?
+-What conclusions have been made in the field?
+
+MODIFICATIONS
+-Modify code to save the state of the model
+-Train the model several times and and save different versions (change the seed!)
+-Try to do the following analyses with all different models, hope to see distributions are similar
+
+TRAINING
+-Would it still work if we filtered names to be at max length 6 for example and reduced the context window accordingly?
+-Will it still produce reasonable output?
+-Consider distribution of name lengths (spacing between delimiters)
+
+INPUT
+-Token distribution is marginal multinomial (simple vector of length 27)
+-All pair distributions would be a 27 x 27 matrix (how often does one character follow another?)
+-Consider triplets and further (how often does this specific sequence of length k occur?)
+
+OUTPUT
+-Test things with different values of temperature (does temperature of 0 lead to deterministic results?)
+-What do distributions of output look like when the temperature changes? Does temp of 0 lead to distribution being same as input?
+-Does temp of 1 lead to distribution being uniform?
+-Test how the input maps to the output at test time
+-How often does the model hallucinate based on temperature or other parameters?
+
+RECURSIVE BEHAVIOR
+-What if you feed your outputted names into the model to produce more names?
+-Do the dsitributions change? Do the names change?
+-Does the model converge to something? Does it loop?
+
+
+-Input character distribution compared to output character distribution
+-Playing around with temperature to see how character distributions change
