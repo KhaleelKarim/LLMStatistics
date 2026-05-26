@@ -6,6 +6,7 @@ Everything else is just efficiency.
 @karpathy
 """
 
+import json     # for checkpoint serialization
 import os       # os.path.exists
 import math     # math.log, math.exp
 import random   # random.seed, random.choices, random.gauss, random.shuffle
@@ -143,58 +144,86 @@ def gpt(token_id, pos_id, keys, values):
     logits = linear(x, state_dict['lm_head'])
     return logits
 
-# Let there be Adam, the blessed optimizer and its buffers
-learning_rate, beta1, beta2, eps_adam = 0.01, 0.85, 0.99, 1e-8
-m = [0.0] * len(params) # first moment buffer
-v = [0.0] * len(params) # second moment buffer
+# ---------------------------------------------------------------------------
+# Checkpoint utilities
+# ---------------------------------------------------------------------------
 
-# Repeat in sequence
-num_steps = 1000 # number of training steps
-for step in range(num_steps):
+def save_checkpoint(path, state_dict, uchars, BOS, n_layer, n_embd, block_size, n_head):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    payload = {
+        'config': {'n_layer': n_layer, 'n_embd': n_embd, 'block_size': block_size, 'n_head': n_head},
+        'tokenizer': {'uchars': uchars, 'BOS': BOS, 'vocab_size': len(uchars) + 1},
+        'weights': {k: [[p.data for p in row] for row in mat] for k, mat in state_dict.items()},
+    }
+    with open(path, 'w') as f:
+        json.dump(payload, f)
 
-    # Take single document, tokenize it, surround it with BOS special token on both sides
-    doc = docs[step % len(docs)]
-    tokens = [BOS] + [uchars.index(ch) for ch in doc] + [BOS]
-    n = min(block_size, len(tokens) - 1)
+def load_checkpoint(path):
+    with open(path) as f:
+        payload = json.load(f)
+    cfg = payload['config']
+    tok = payload['tokenizer']
+    loaded_sd = {k: [[Value(v) for v in row] for row in mat] for k, mat in payload['weights'].items()}
+    loaded_params = [p for mat in loaded_sd.values() for row in mat for p in row]
+    return loaded_sd, loaded_params, tok['uchars'], tok['BOS'], cfg['n_layer'], cfg['n_embd'], cfg['block_size'], cfg['n_head']
 
-    # Forward the token sequence through the model, building up the computation graph all the way to the loss
-    keys, values = [[] for _ in range(n_layer)], [[] for _ in range(n_layer)]
-    losses = []
-    for pos_id in range(n):
-        token_id, target_id = tokens[pos_id], tokens[pos_id + 1]
-        logits = gpt(token_id, pos_id, keys, values)
-        probs = softmax(logits)
-        loss_t = -probs[target_id].log()
-        losses.append(loss_t)
-    loss = (1 / n) * sum(losses) # final average loss over the document sequence. May yours be low.
+# ---------------------------------------------------------------------------
+# Entry point: train then infer
+# ---------------------------------------------------------------------------
 
-    # Backward the loss, calculating the gradients with respect to all model parameters
-    loss.backward()
+if __name__ == "__main__":
+    # Let there be Adam, the blessed optimizer and its buffers
+    learning_rate, beta1, beta2, eps_adam = 0.01, 0.85, 0.99, 1e-8
+    m = [0.0] * len(params) # first moment buffer
+    v = [0.0] * len(params) # second moment buffer
 
-    # Adam optimizer update: update the model parameters based on the corresponding gradients
-    lr_t = learning_rate * (1 - step / num_steps) # linear learning rate decay
-    for i, p in enumerate(params):
-        m[i] = beta1 * m[i] + (1 - beta1) * p.grad
-        v[i] = beta2 * v[i] + (1 - beta2) * p.grad ** 2
-        m_hat = m[i] / (1 - beta1 ** (step + 1))
-        v_hat = v[i] / (1 - beta2 ** (step + 1))
-        p.data -= lr_t * m_hat / (v_hat ** 0.5 + eps_adam)
-        p.grad = 0
+    # Repeat in sequence
+    num_steps = 1000 # number of training steps
+    for step in range(num_steps):
 
-    print(f"step {step+1:4d} / {num_steps:4d} | loss {loss.data:.4f}", end='\r')
+        # Take single document, tokenize it, surround it with BOS special token on both sides
+        doc = docs[step % len(docs)]
+        tokens = [BOS] + [uchars.index(ch) for ch in doc] + [BOS]
+        n = min(block_size, len(tokens) - 1)
 
-# Inference: may the model babble back to us
-temperature = 0.5 # in (0, 1], control the "creativity" of generated text, low to high
-print("\n--- inference (new, hallucinated names) ---")
-for sample_idx in range(20):
-    keys, values = [[] for _ in range(n_layer)], [[] for _ in range(n_layer)]
-    token_id = BOS
-    sample = []
-    for pos_id in range(block_size):
-        logits = gpt(token_id, pos_id, keys, values)
-        probs = softmax([l / temperature for l in logits])
-        token_id = random.choices(range(vocab_size), weights=[p.data for p in probs])[0]
-        if token_id == BOS:
-            break
-        sample.append(uchars[token_id])
-    print(f"sample {sample_idx+1:2d}: {''.join(sample)}")
+        # Forward the token sequence through the model, building up the computation graph all the way to the loss
+        keys, values = [[] for _ in range(n_layer)], [[] for _ in range(n_layer)]
+        losses = []
+        for pos_id in range(n):
+            token_id, target_id = tokens[pos_id], tokens[pos_id + 1]
+            logits = gpt(token_id, pos_id, keys, values)
+            probs = softmax(logits)
+            loss_t = -probs[target_id].log()
+            losses.append(loss_t)
+        loss = (1 / n) * sum(losses) # final average loss over the document sequence. May yours be low.
+
+        # Backward the loss, calculating the gradients with respect to all model parameters
+        loss.backward()
+
+        # Adam optimizer update: update the model parameters based on the corresponding gradients
+        lr_t = learning_rate * (1 - step / num_steps) # linear learning rate decay
+        for i, p in enumerate(params):
+            m[i] = beta1 * m[i] + (1 - beta1) * p.grad
+            v[i] = beta2 * v[i] + (1 - beta2) * p.grad ** 2
+            m_hat = m[i] / (1 - beta1 ** (step + 1))
+            v_hat = v[i] / (1 - beta2 ** (step + 1))
+            p.data -= lr_t * m_hat / (v_hat ** 0.5 + eps_adam)
+            p.grad = 0
+
+        print(f"step {step+1:4d} / {num_steps:4d} | loss {loss.data:.4f}", end='\r')
+
+    # Inference: may the model babble back to us
+    temperature = 0.5 # in (0, 1], control the "creativity" of generated text, low to high
+    print("\n--- inference (new, hallucinated names) ---")
+    for sample_idx in range(20):
+        keys, values = [[] for _ in range(n_layer)], [[] for _ in range(n_layer)]
+        token_id = BOS
+        sample = []
+        for pos_id in range(block_size):
+            logits = gpt(token_id, pos_id, keys, values)
+            probs = softmax([l / temperature for l in logits])
+            token_id = random.choices(range(vocab_size), weights=[p.data for p in probs])[0]
+            if token_id == BOS:
+                break
+            sample.append(uchars[token_id])
+        print(f"sample {sample_idx+1:2d}: {''.join(sample)}")
