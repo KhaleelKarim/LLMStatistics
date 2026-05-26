@@ -152,6 +152,9 @@ def gpt(token_id, pos_id, keys, values):
 def build_filename(seed, n_embd, n_layer, block_size):
     return f"checkpoints/ckpt_seed{seed}_embd{n_embd}_layer{n_layer}_blk{block_size}.json"
 
+def build_kl_filename(seed, n_embd, n_layer, block_size, kl_interval):
+    return f"data/kl_seed{seed}_embd{n_embd}_layer{n_layer}_blk{block_size}_interval{kl_interval}.npz"
+
 def should_train(path):
     return not os.path.exists(path)
 
@@ -185,6 +188,27 @@ def load_checkpoint(path):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import argparse
+    from ngrams import load_ngrams
+    from kl import kl_at_position, average_kl, save_kl_records
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--kl', type=int, default=10, metavar='INTERVAL',
+                        help='compute KL divergence every INTERVAL steps (0=off, default=10)')
+    args = parser.parse_args()
+    kl_interval = args.kl
+
+    NGRAMS_PATH = "data/ngrams.npz"
+    kl_path = build_kl_filename(seed, n_embd, n_layer, block_size, kl_interval)
+
+    distributions = None
+    if kl_interval > 0:
+        if os.path.exists(NGRAMS_PATH):
+            distributions = load_ngrams(NGRAMS_PATH)
+        else:
+            print(f"KL tracking disabled: {NGRAMS_PATH} not found. Run: uv run python src/ngrams.py")
+            kl_interval = 0
+
     ckpt_path = build_filename(seed, n_embd, n_layer, block_size)
 
     if should_train(ckpt_path):
@@ -195,12 +219,17 @@ if __name__ == "__main__":
 
         # Repeat in sequence
         num_steps = 1000 # number of training steps
+        kl_records = {1: [], 2: [], 3: [], 4: []}
         for step in range(num_steps):
 
             # Take single document, tokenize it, surround it with BOS special token on both sides
             doc = docs[step % len(docs)]
             tokens = [BOS] + [uchars.index(ch) for ch in doc] + [BOS]
             n = min(block_size, len(tokens) - 1)
+
+            is_eval = kl_interval > 0 and step % kl_interval == 0
+            if is_eval:
+                step_kl_positions = []
 
             # Forward the token sequence through the model, building up the computation graph all the way to the loss
             keys, values = [[] for _ in range(n_layer)], [[] for _ in range(n_layer)]
@@ -211,10 +240,18 @@ if __name__ == "__main__":
                 probs = softmax(logits)
                 loss_t = -probs[target_id].log()
                 losses.append(loss_t)
+                if is_eval:
+                    step_kl_positions.append(kl_at_position(probs, tokens, pos_id, distributions))
             loss = (1 / n) * sum(losses) # final average loss over the document sequence. May yours be low.
 
             # Backward the loss, calculating the gradients with respect to all model parameters
             loss.backward()
+
+            if is_eval:
+                step_avg = average_kl(step_kl_positions)
+                for order, val in step_avg.items():
+                    if not math.isnan(val):
+                        kl_records[order].append((step, val))
 
             # Adam optimizer update: update the model parameters based on the corresponding gradients
             lr_t = learning_rate * (1 - step / num_steps) # linear learning rate decay
@@ -230,8 +267,13 @@ if __name__ == "__main__":
 
         save_checkpoint(ckpt_path, state_dict, uchars, BOS, n_layer, n_embd, block_size, n_head)
         print(f"\ncheckpoint saved → {ckpt_path}")
+        if kl_interval > 0:
+            save_kl_records(kl_path, kl_records)
+            print(f"KL records saved → {kl_path}")
     else:
         print(f"loading checkpoint from {ckpt_path}")
+        if kl_interval > 0:
+            print("Note: KL tracking only runs during training. Delete checkpoint to re-enable.")
         state_dict, params, uchars, BOS, n_layer, n_embd, block_size, n_head = load_checkpoint(ckpt_path)
         head_dim = n_embd // n_head
         vocab_size = len(uchars) + 1
