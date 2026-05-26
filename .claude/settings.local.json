@@ -5,7 +5,14 @@
       "Bash(wsl *)",
       "Bash(uv sync *)",
       "Bash(uv run *)",
-      "Bash(cd \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\khal\\\\toolbox\\\\LLMStatistics\")"
+      "Bash(cd \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\khal\\\\toolbox\\\\LLMStatistics\")",
+      "Bash(ls -la \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\khal\\\\toolbox\\\\LLMStatistics\")",
+      "Bash(bash *)",
+      "Bash(git -C /home/khal/toolbox/LLMStatistics rev-parse --show-toplevel)",
+      "Read(///wsl.localhost/Ubuntu//**)",
+      "Read(///wsl.localhost/Ubuntu/home/khal/toolbox/LLMStatistics/data/**)",
+      "Bash(file data/*.npz)",
+      "Bash(ls -la \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\khal\\\\toolbox\\\\\" 2>&1 || pwd)"
     ]
   }
 }
