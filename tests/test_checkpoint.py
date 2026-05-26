@@ -2,7 +2,7 @@ import sys, os, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import microgpt
-from microgpt import Value, save_checkpoint, load_checkpoint, build_filename, should_train
+from microgpt import Value, save_checkpoint, load_checkpoint, build_filename, should_train, build_kl_filename
 
 # ---------------------------------------------------------------------------
 # Test 1: weights round-trip — saved floats come back with correct values
@@ -170,3 +170,16 @@ def test_load_config_mismatch_raises(tmp_path):
 
     with pytest.raises((AssertionError, ValueError)):
         load_checkpoint(path)
+
+# ---------------------------------------------------------------------------
+# Test 11: build_kl_filename encodes config and kl_interval
+# ---------------------------------------------------------------------------
+
+def test_build_kl_filename():
+    name = build_kl_filename(seed=42, n_embd=16, n_layer=1, block_size=16, kl_interval=10)
+    assert name.startswith('data/')
+    assert name.endswith('.npz')
+    assert '42' in name and '10' in name
+
+    other = build_kl_filename(seed=42, n_embd=16, n_layer=1, block_size=16, kl_interval=5)
+    assert name != other
