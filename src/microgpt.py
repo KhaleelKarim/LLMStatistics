@@ -155,6 +155,9 @@ def build_filename(seed, n_embd, n_layer, block_size):
 def build_kl_filename(seed, n_embd, n_layer, block_size, kl_interval):
     return f"data/kl_seed{seed}_embd{n_embd}_layer{n_layer}_blk{block_size}_interval{kl_interval}.npz"
 
+def build_infer_filename(seed, n_embd, n_layer, block_size, num_infer):
+    return f"data/infer_seed{seed}_embd{n_embd}_layer{n_layer}_blk{block_size}_n{num_infer}.txt"
+
 def should_train(path):
     return not os.path.exists(path)
 
@@ -195,6 +198,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--kl', type=int, default=10, metavar='INTERVAL',
                         help='compute KL divergence every INTERVAL steps (0=off, default=10)')
+    parser.add_argument('--num_infer', type=int, default=20, metavar='N',
+                        help='number of names to generate during inference (default: 20)')
     args = parser.parse_args()
     kl_interval = args.kl
 
@@ -279,9 +284,12 @@ if __name__ == "__main__":
         vocab_size = len(uchars) + 1
 
     # Inference: may the model babble back to us
+    num_infer = args.num_infer
+    infer_path = build_infer_filename(seed, n_embd, n_layer, block_size, num_infer)
     temperature = 0.5 # in (0, 1], control the "creativity" of generated text, low to high
     print("\n--- inference (new, hallucinated names) ---")
-    for sample_idx in range(20):
+    generated = []
+    for sample_idx in range(num_infer):
         keys, values = [[] for _ in range(n_layer)], [[] for _ in range(n_layer)]
         token_id = BOS
         sample = []
@@ -292,4 +300,11 @@ if __name__ == "__main__":
             if token_id == BOS:
                 break
             sample.append(uchars[token_id])
-        print(f"sample {sample_idx+1:2d}: {''.join(sample)}")
+        name = ''.join(sample)
+        generated.append(name)
+        print(f"sample {sample_idx+1:2d}: {name}")
+
+    os.makedirs("data", exist_ok=True)
+    with open(infer_path, 'w') as f:
+        f.write('\n'.join(generated) + '\n')
+    print(f"inference output saved → {infer_path}")
