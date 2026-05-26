@@ -6,27 +6,38 @@ UNDERSTANDING CODE
 -Understand the parameters of temperature and context window
 -How does the window length work? does it implement padding or read into previous names?
 
--Understanding the code further
+-Understanding the code further will require watching some videos on attention and transformers
+-Look at 3Blue1Brown
 
 LITERATURE
 -Has any of this stuff been done before? 
 -How have people played with microGPT or similar before?
 -What conclusions have been made in the field?
 
+-All of the angles have been researched, but none of them have researched microGPT
+-The advantage with microgpt is that it is so small and computations are reasonable
+-The papers I saw relied on sampling which isn't a bad thing but it makes our situation unique
+
 MODIFICATIONS
 -Modify code to save the state of the model
 -Train the model several times and and save different versions (change the seed!)
 -Try to do the following analyses with all different models, hope to see distributions are similar
+
+-Modifications were successful, holding off on training many models though, we can save that for later
 
 TRAINING
 -Would it still work if we filtered names to be at max length 6 for example and reduced the context window accordingly?
 -Will it still produce reasonable output?
 -Consider distribution of name lengths (spacing between delimiters)
 
+-There's no reason that this wouldn't work, testing it might be interesting but its a lower priority
+
 INPUT
 -Token distribution is marginal multinomial (simple vector of length 27)
 -All pair distributions would be a 27 x 27 matrix (how often does one character follow another?)
 -Consider triplets and further (how often does this specific sequence of length k occur?)
+
+
 
 OUTPUT
 -Test things with different values of temperature (does temperature of 0 lead to deterministic results?)
