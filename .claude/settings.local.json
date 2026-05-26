@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Read(///wsl.localhost/Ubuntu/home/khal/toolbox/LLMStatistics/**)"
+      "Read(///wsl.localhost/Ubuntu/home/khal/toolbox/LLMStatistics/**)",
+      "Bash(wsl *)"
     ]
   }
 }
