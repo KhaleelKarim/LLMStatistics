@@ -10,7 +10,8 @@ import json     # for checkpoint serialization
 import os       # os.path.exists
 import math     # math.log, math.exp
 import random   # random.seed, random.choices, random.gauss, random.shuffle
-random.seed(42) # Let there be order among chaos
+seed = 42
+random.seed(seed) # Let there be order among chaos
 
 # Let there be a Dataset `docs`: list[str] of documents (e.g. a list of names)
 if not os.path.exists('data/input.txt'):
@@ -180,49 +181,60 @@ def load_checkpoint(path):
     return loaded_sd, loaded_params, tok['uchars'], tok['BOS'], cfg['n_layer'], cfg['n_embd'], cfg['block_size'], cfg['n_head']
 
 # ---------------------------------------------------------------------------
-# Entry point: train then infer
+# Entry point: load checkpoint if available, otherwise train then save
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # Let there be Adam, the blessed optimizer and its buffers
-    learning_rate, beta1, beta2, eps_adam = 0.01, 0.85, 0.99, 1e-8
-    m = [0.0] * len(params) # first moment buffer
-    v = [0.0] * len(params) # second moment buffer
+    ckpt_path = build_filename(seed, n_embd, n_layer, block_size)
 
-    # Repeat in sequence
-    num_steps = 1000 # number of training steps
-    for step in range(num_steps):
+    if should_train(ckpt_path):
+        # Let there be Adam, the blessed optimizer and its buffers
+        learning_rate, beta1, beta2, eps_adam = 0.01, 0.85, 0.99, 1e-8
+        m = [0.0] * len(params) # first moment buffer
+        v = [0.0] * len(params) # second moment buffer
 
-        # Take single document, tokenize it, surround it with BOS special token on both sides
-        doc = docs[step % len(docs)]
-        tokens = [BOS] + [uchars.index(ch) for ch in doc] + [BOS]
-        n = min(block_size, len(tokens) - 1)
+        # Repeat in sequence
+        num_steps = 1000 # number of training steps
+        for step in range(num_steps):
 
-        # Forward the token sequence through the model, building up the computation graph all the way to the loss
-        keys, values = [[] for _ in range(n_layer)], [[] for _ in range(n_layer)]
-        losses = []
-        for pos_id in range(n):
-            token_id, target_id = tokens[pos_id], tokens[pos_id + 1]
-            logits = gpt(token_id, pos_id, keys, values)
-            probs = softmax(logits)
-            loss_t = -probs[target_id].log()
-            losses.append(loss_t)
-        loss = (1 / n) * sum(losses) # final average loss over the document sequence. May yours be low.
+            # Take single document, tokenize it, surround it with BOS special token on both sides
+            doc = docs[step % len(docs)]
+            tokens = [BOS] + [uchars.index(ch) for ch in doc] + [BOS]
+            n = min(block_size, len(tokens) - 1)
 
-        # Backward the loss, calculating the gradients with respect to all model parameters
-        loss.backward()
+            # Forward the token sequence through the model, building up the computation graph all the way to the loss
+            keys, values = [[] for _ in range(n_layer)], [[] for _ in range(n_layer)]
+            losses = []
+            for pos_id in range(n):
+                token_id, target_id = tokens[pos_id], tokens[pos_id + 1]
+                logits = gpt(token_id, pos_id, keys, values)
+                probs = softmax(logits)
+                loss_t = -probs[target_id].log()
+                losses.append(loss_t)
+            loss = (1 / n) * sum(losses) # final average loss over the document sequence. May yours be low.
 
-        # Adam optimizer update: update the model parameters based on the corresponding gradients
-        lr_t = learning_rate * (1 - step / num_steps) # linear learning rate decay
-        for i, p in enumerate(params):
-            m[i] = beta1 * m[i] + (1 - beta1) * p.grad
-            v[i] = beta2 * v[i] + (1 - beta2) * p.grad ** 2
-            m_hat = m[i] / (1 - beta1 ** (step + 1))
-            v_hat = v[i] / (1 - beta2 ** (step + 1))
-            p.data -= lr_t * m_hat / (v_hat ** 0.5 + eps_adam)
-            p.grad = 0
+            # Backward the loss, calculating the gradients with respect to all model parameters
+            loss.backward()
 
-        print(f"step {step+1:4d} / {num_steps:4d} | loss {loss.data:.4f}", end='\r')
+            # Adam optimizer update: update the model parameters based on the corresponding gradients
+            lr_t = learning_rate * (1 - step / num_steps) # linear learning rate decay
+            for i, p in enumerate(params):
+                m[i] = beta1 * m[i] + (1 - beta1) * p.grad
+                v[i] = beta2 * v[i] + (1 - beta2) * p.grad ** 2
+                m_hat = m[i] / (1 - beta1 ** (step + 1))
+                v_hat = v[i] / (1 - beta2 ** (step + 1))
+                p.data -= lr_t * m_hat / (v_hat ** 0.5 + eps_adam)
+                p.grad = 0
+
+            print(f"step {step+1:4d} / {num_steps:4d} | loss {loss.data:.4f}", end='\r')
+
+        save_checkpoint(ckpt_path, state_dict, uchars, BOS, n_layer, n_embd, block_size, n_head)
+        print(f"\ncheckpoint saved → {ckpt_path}")
+    else:
+        print(f"loading checkpoint from {ckpt_path}")
+        state_dict, params, uchars, BOS, n_layer, n_embd, block_size, n_head = load_checkpoint(ckpt_path)
+        head_dim = n_embd // n_head
+        vocab_size = len(uchars) + 1
 
     # Inference: may the model babble back to us
     temperature = 0.5 # in (0, 1], control the "creativity" of generated text, low to high
