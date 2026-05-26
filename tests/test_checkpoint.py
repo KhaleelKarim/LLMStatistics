@@ -2,7 +2,7 @@ import sys, os, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import microgpt
-from microgpt import Value, save_checkpoint, load_checkpoint
+from microgpt import Value, save_checkpoint, load_checkpoint, build_filename, should_train
 
 # ---------------------------------------------------------------------------
 # Test 1: weights round-trip — saved floats come back with correct values
@@ -96,3 +96,77 @@ def test_config_roundtrip(tmp_path):
     assert loaded_n_embd == 32
     assert loaded_block_size == 8
     assert loaded_n_head == 2
+
+# ---------------------------------------------------------------------------
+# Test 7: behavioral fidelity — same logits before save and after load
+# ---------------------------------------------------------------------------
+
+def test_behavioral_fidelity(tmp_path):
+    path = str(tmp_path / "ckpt.json")
+
+    # capture logits from the live model
+    keys = [[] for _ in range(microgpt.n_layer)]
+    vals  = [[] for _ in range(microgpt.n_layer)]
+    before = [v.data for v in microgpt.gpt(0, 0, keys, vals)]
+
+    save_checkpoint(path, microgpt.state_dict, microgpt.uchars, microgpt.BOS,
+                    microgpt.n_layer, microgpt.n_embd, microgpt.block_size, microgpt.n_head)
+
+    loaded_sd, *_ = load_checkpoint(path)
+    original_sd = microgpt.state_dict
+    microgpt.state_dict = loaded_sd
+    try:
+        keys = [[] for _ in range(microgpt.n_layer)]
+        vals  = [[] for _ in range(microgpt.n_layer)]
+        after = [v.data for v in microgpt.gpt(0, 0, keys, vals)]
+    finally:
+        microgpt.state_dict = original_sd
+
+    assert before == after
+
+# ---------------------------------------------------------------------------
+# Test 8: build_filename encodes config and distinguishes different configs
+# ---------------------------------------------------------------------------
+
+def test_build_filename():
+    name = build_filename(seed=42, n_embd=16, n_layer=1, block_size=16)
+    assert isinstance(name, str)
+    assert name.endswith('.json')
+    assert '42' in name
+    assert name.startswith('checkpoints/')
+
+    other = build_filename(seed=42, n_embd=32, n_layer=2, block_size=8)
+    assert name != other
+
+# ---------------------------------------------------------------------------
+# Test 9: should_train returns True when no checkpoint exists, False when it does
+# ---------------------------------------------------------------------------
+
+def test_should_train(tmp_path):
+    path = str(tmp_path / "ckpt.json")
+    assert should_train(path) is True
+
+    sd = {'w': [[Value(1.0)]]}
+    save_checkpoint(path, sd, ['a'], 1, n_layer=1, n_embd=1, block_size=1, n_head=1)
+    assert should_train(path) is False
+
+# ---------------------------------------------------------------------------
+# Test 10: loading a checkpoint whose config mismatches expected shapes raises
+# ---------------------------------------------------------------------------
+
+def test_load_config_mismatch_raises(tmp_path):
+    import pytest
+    # save a checkpoint with n_embd=4
+    sd = {'wte': [[Value(0.1)] * 4] * 2}
+    path = str(tmp_path / "ckpt.json")
+    save_checkpoint(path, sd, ['a', 'b'], 2, n_layer=1, n_embd=4, block_size=2, n_head=1)
+
+    # tamper: overwrite config to claim n_embd=8 while weights are still shape 4
+    with open(path) as f:
+        payload = json.load(f)
+    payload['config']['n_embd'] = 8
+    with open(path, 'w') as f:
+        json.dump(payload, f)
+
+    with pytest.raises((AssertionError, ValueError)):
+        load_checkpoint(path)

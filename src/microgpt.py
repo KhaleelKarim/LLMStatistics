@@ -148,6 +148,12 @@ def gpt(token_id, pos_id, keys, values):
 # Checkpoint utilities
 # ---------------------------------------------------------------------------
 
+def build_filename(seed, n_embd, n_layer, block_size):
+    return f"checkpoints/ckpt_seed{seed}_embd{n_embd}_layer{n_layer}_blk{block_size}.json"
+
+def should_train(path):
+    return not os.path.exists(path)
+
 def save_checkpoint(path, state_dict, uchars, BOS, n_layer, n_embd, block_size, n_head):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     payload = {
@@ -164,6 +170,12 @@ def load_checkpoint(path):
     cfg = payload['config']
     tok = payload['tokenizer']
     loaded_sd = {k: [[Value(v) for v in row] for row in mat] for k, mat in payload['weights'].items()}
+    # validate wte row width matches n_embd — catches config/weights mismatch
+    n_embd = cfg['n_embd']
+    if 'wte' in loaded_sd:
+        actual = len(loaded_sd['wte'][0])
+        if actual != n_embd:
+            raise ValueError(f"config says n_embd={n_embd} but 'wte' has row width {actual}")
     loaded_params = [p for mat in loaded_sd.values() for row in mat for p in row]
     return loaded_sd, loaded_params, tok['uchars'], tok['BOS'], cfg['n_layer'], cfg['n_embd'], cfg['block_size'], cfg['n_head']
 

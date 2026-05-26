@@ -6,6 +6,8 @@ UNDERSTANDING CODE
 -Understand the parameters of temperature and context window
 -How does the window length work? does it implement padding or read into previous names?
 
+-Understanding the code further
+
 LITERATURE
 -Has any of this stuff been done before? 
 -How have people played with microGPT or similar before?
