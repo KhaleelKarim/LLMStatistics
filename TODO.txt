@@ -19,7 +19,7 @@ OUTPUT
 -Confirm what happens when temperature is approaching 0 or exactly 1
 
 PROMPT
--Is there any sort of prompt
+-Add the ability to prompt
 
 RECURSIVE BEHAVIOR
 -What if you feed your outputted names into the model to produce more names?
