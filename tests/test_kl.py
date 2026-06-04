@@ -7,16 +7,12 @@ from ngrams import build_tokenizer, compute_ngram_distribution
 from kl import kl_divergence, kl_at_position, average_kl, save_kl_records, load_kl_records
 
 
-class FakeValue:
-    def __init__(self, data): self.data = data
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def fake_uniform(vocab_size):
-    return [FakeValue(0.0)] * vocab_size  # all-zero logits → uniform after softmax
+    return [0.0] * vocab_size  # all-zero probs (valid input to kl_at_position)
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +92,7 @@ def test_kl_at_position_known_value():
     # p_model = exact unigram probs → KL(p_unigram || p_unigram) ≈ 0
     BOS, vocab_size, stoi, distributions, tokens = _small_setup()
     probs_1, _ = distributions[1]
-    p_vals = [FakeValue(float(probs_1[i])) for i in range(vocab_size)]
+    p_vals = [float(probs_1[i]) for i in range(vocab_size)]
     result = kl_at_position(p_vals, tokens, 0, distributions, orders=(1,))
     assert result[1] is not None
     assert abs(result[1]) < 1e-5

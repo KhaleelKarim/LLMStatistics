@@ -1,19 +1,20 @@
 """
-The most atomic way to train and run inference for a GPT in pure, dependency-free Python.
-This file is the complete algorithm.
-Everything else is just efficiency.
-
-@karpathy
+GPT in PyTorch — fast, GPU-capable rewrite.
+Architecture: RMSNorm (no learnable scale), ReLU activations, no biases, KV cache.
+Identical architectural choices to the pure-Python original; computation replaces Value scalars with tensors.
 """
 
-import json     # for checkpoint serialization
-import os       # os.path.exists
-import math     # math.log, math.exp
-import random   # random.seed, random.choices, random.gauss, random.shuffle
-seed = 42
-random.seed(seed) # Let there be order among chaos
+import os
+import math
+import random
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-# Let there be a Dataset `docs`: list[str] of documents (e.g. a list of names)
+seed = 42
+random.seed(seed)
+torch.manual_seed(seed)
+
 if not os.path.exists('data/input.txt'):
     import urllib.request
     names_url = 'https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt'
@@ -22,135 +23,79 @@ docs = [line.strip() for line in open('data/input.txt') if line.strip()]
 random.shuffle(docs)
 print(f"num docs: {len(docs)}")
 
-# Let there be a Tokenizer to translate strings to sequences of integers ("tokens") and back
-uchars = sorted(set(''.join(docs))) # unique characters in the dataset become token ids 0..n-1
-BOS = len(uchars) # token id for a special Beginning of Sequence (BOS) token
-vocab_size = len(uchars) + 1 # total number of unique tokens, +1 is for BOS
+uchars = sorted(set(''.join(docs)))
+BOS = len(uchars)
+vocab_size = len(uchars) + 1
 print(f"vocab size: {vocab_size}")
 
-# Let there be Autograd to recursively apply the chain rule through a computation graph
-class Value:
-    __slots__ = ('data', 'grad', '_children', '_local_grads') # Python optimization for memory usage
+n_layer = 1
+n_embd = 16
+block_size = 16
+n_head = 4
+head_dim = n_embd // n_head
 
-    def __init__(self, data, children=(), local_grads=()):
-        self.data = data                # scalar value of this node calculated during forward pass
-        self.grad = 0                   # derivative of the loss w.r.t. this node, calculated in backward pass
-        self._children = children       # children of this node in the computation graph
-        self._local_grads = local_grads # local derivative of this node w.r.t. its children
 
-    def __add__(self, other):
-        other = other if isinstance(other, Value) else Value(other)
-        return Value(self.data + other.data, (self, other), (1, 1))
+def rmsnorm(x: torch.Tensor) -> torch.Tensor:
+    return x * (x.pow(2).mean(-1, keepdim=True) + 1e-5).rsqrt()
 
-    def __mul__(self, other):
-        other = other if isinstance(other, Value) else Value(other)
-        return Value(self.data * other.data, (self, other), (other.data, self.data))
 
-    def __pow__(self, other): return Value(self.data**other, (self,), (other * self.data**(other-1),))
-    def log(self): return Value(math.log(self.data), (self,), (1/self.data,))
-    def exp(self): return Value(math.exp(self.data), (self,), (math.exp(self.data),))
-    def relu(self): return Value(max(0, self.data), (self,), (float(self.data > 0),))
-    def __neg__(self): return self * -1
-    def __radd__(self, other): return self + other
-    def __sub__(self, other): return self + (-other)
-    def __rsub__(self, other): return other + (-self)
-    def __rmul__(self, other): return self * other
-    def __truediv__(self, other): return self * other**-1
-    def __rtruediv__(self, other): return other * self**-1
+class GPT(nn.Module):
+    def __init__(self, vocab_size, n_embd, block_size, n_layer, n_head):
+        super().__init__()
+        self.n_layer = n_layer
+        self.n_head = n_head
+        self.head_dim = n_embd // n_head
+        self.wte = nn.Embedding(vocab_size, n_embd)
+        self.wpe = nn.Embedding(block_size, n_embd)
+        for i in range(n_layer):
+            setattr(self, f'layer{i}_attn_wq', nn.Linear(n_embd, n_embd, bias=False))
+            setattr(self, f'layer{i}_attn_wk', nn.Linear(n_embd, n_embd, bias=False))
+            setattr(self, f'layer{i}_attn_wv', nn.Linear(n_embd, n_embd, bias=False))
+            setattr(self, f'layer{i}_attn_wo', nn.Linear(n_embd, n_embd, bias=False))
+            setattr(self, f'layer{i}_mlp_fc1', nn.Linear(n_embd, 4 * n_embd, bias=False))
+            setattr(self, f'layer{i}_mlp_fc2', nn.Linear(4 * n_embd, n_embd, bias=False))
+        self.lm_head = nn.Linear(n_embd, vocab_size, bias=False)
+        for m in self.modules():
+            if isinstance(m, (nn.Linear, nn.Embedding)):
+                nn.init.normal_(m.weight, 0.0, 0.08)
 
-    def backward(self):
-        topo = []
-        visited = set()
-        def build_topo(v):
-            if v not in visited:
-                visited.add(v)
-                for child in v._children:
-                    build_topo(child)
-                topo.append(v)
-        build_topo(self)
-        self.grad = 1
-        for v in reversed(topo):
-            for child, local_grad in zip(v._children, v._local_grads):
-                child.grad += local_grad * v.grad
-
-# Initialize the parameters, to store the knowledge of the model
-n_layer = 1     # depth of the transformer neural network (number of layers)
-n_embd = 16     # width of the network (embedding dimension)
-block_size = 16 # maximum context length of the attention window (note: the longest name is 15 characters)
-n_head = 4      # number of attention heads
-head_dim = n_embd // n_head # derived dimension of each head
-matrix = lambda nout, nin, std=0.08: [[Value(random.gauss(0, std)) for _ in range(nin)] for _ in range(nout)]
-state_dict = {'wte': matrix(vocab_size, n_embd), 'wpe': matrix(block_size, n_embd), 'lm_head': matrix(vocab_size, n_embd)}
-for i in range(n_layer):
-    state_dict[f'layer{i}.attn_wq'] = matrix(n_embd, n_embd)
-    state_dict[f'layer{i}.attn_wk'] = matrix(n_embd, n_embd)
-    state_dict[f'layer{i}.attn_wv'] = matrix(n_embd, n_embd)
-    state_dict[f'layer{i}.attn_wo'] = matrix(n_embd, n_embd)
-    state_dict[f'layer{i}.mlp_fc1'] = matrix(4 * n_embd, n_embd)
-    state_dict[f'layer{i}.mlp_fc2'] = matrix(n_embd, 4 * n_embd)
-params = [p for mat in state_dict.values() for row in mat for p in row] # flatten params into a single list[Value]
-print(f"num params: {len(params)}")
-
-# Define the model architecture: a function mapping tokens and parameters to logits over what comes next
-# Follow GPT-2, blessed among the GPTs, with minor differences: layernorm -> rmsnorm, no biases, GeLU -> ReLU
-def linear(x, w):
-    return [sum(wi * xi for wi, xi in zip(wo, x)) for wo in w]
-
-def softmax(logits):
-    max_val = max(val.data for val in logits)
-    exps = [(val - max_val).exp() for val in logits]
-    total = sum(exps)
-    return [e / total for e in exps]
-
-def rmsnorm(x):
-    ms = sum(xi * xi for xi in x) / len(x)
-    scale = (ms + 1e-5) ** -0.5
-    return [xi * scale for xi in x]
-
-def gpt(token_id, pos_id, keys, values):
-    tok_emb = state_dict['wte'][token_id] # token embedding
-    pos_emb = state_dict['wpe'][pos_id] # position embedding
-    x = [t + p for t, p in zip(tok_emb, pos_emb)] # joint token and position embedding
-    x = rmsnorm(x) # note: not redundant due to backward pass via the residual connection
-
-    for li in range(n_layer):
-        # 1) Multi-head Attention block
-        x_residual = x
+    def forward(self, token_id: int, pos_id: int, keys: list, values: list) -> torch.Tensor:
+        device = self.wte.weight.device
+        x = (self.wte(torch.tensor([token_id], device=device)) +
+             self.wpe(torch.tensor([pos_id], device=device))).squeeze(0)
         x = rmsnorm(x)
-        q = linear(x, state_dict[f'layer{li}.attn_wq'])
-        k = linear(x, state_dict[f'layer{li}.attn_wk'])
-        v = linear(x, state_dict[f'layer{li}.attn_wv'])
-        keys[li].append(k)
-        values[li].append(v)
-        x_attn = []
-        for h in range(n_head):
-            hs = h * head_dim
-            q_h = q[hs:hs+head_dim]
-            k_h = [ki[hs:hs+head_dim] for ki in keys[li]]
-            v_h = [vi[hs:hs+head_dim] for vi in values[li]]
-            attn_logits = [sum(q_h[j] * k_h[t][j] for j in range(head_dim)) / head_dim**0.5 for t in range(len(k_h))]
-            attn_weights = softmax(attn_logits)
-            head_out = [sum(attn_weights[t] * v_h[t][j] for t in range(len(v_h))) for j in range(head_dim)]
-            x_attn.extend(head_out)
-        x = linear(x_attn, state_dict[f'layer{li}.attn_wo'])
-        x = [a + b for a, b in zip(x, x_residual)]
-        # 2) MLP block
-        x_residual = x
-        x = rmsnorm(x)
-        x = linear(x, state_dict[f'layer{li}.mlp_fc1'])
-        x = [xi.relu() for xi in x]
-        x = linear(x, state_dict[f'layer{li}.mlp_fc2'])
-        x = [a + b for a, b in zip(x, x_residual)]
+        for li in range(self.n_layer):
+            x_res = x
+            x = rmsnorm(x)
+            q = getattr(self, f'layer{li}_attn_wq')(x)
+            k = getattr(self, f'layer{li}_attn_wk')(x)
+            v = getattr(self, f'layer{li}_attn_wv')(x)
+            keys[li].append(k)
+            values[li].append(v)
+            x_attn = []
+            for h in range(self.n_head):
+                hs = h * self.head_dim
+                q_h = q[hs:hs + self.head_dim]
+                k_h = torch.stack([ki[hs:hs + self.head_dim] for ki in keys[li]])
+                v_h = torch.stack([vi[hs:hs + self.head_dim] for vi in values[li]])
+                attn_w = F.softmax(k_h @ q_h / self.head_dim ** 0.5, dim=0)
+                x_attn.append(attn_w @ v_h)
+            x = getattr(self, f'layer{li}_attn_wo')(torch.cat(x_attn))
+            x = x + x_res
+            x_res = x
+            x = rmsnorm(x)
+            x = F.relu(getattr(self, f'layer{li}_mlp_fc1')(x))
+            x = getattr(self, f'layer{li}_mlp_fc2')(x)
+            x = x + x_res
+        return self.lm_head(x)
 
-    logits = linear(x, state_dict['lm_head'])
-    return logits
 
 # ---------------------------------------------------------------------------
 # Checkpoint utilities
 # ---------------------------------------------------------------------------
 
 def build_filename(seed, n_embd, n_layer, block_size):
-    return f"checkpoints/ckpt_seed{seed}_embd{n_embd}_layer{n_layer}_blk{block_size}.json"
+    return f"checkpoints/ckpt_seed{seed}_embd{n_embd}_layer{n_layer}_blk{block_size}.pt"
 
 def build_kl_filename(seed, n_embd, n_layer, block_size, kl_interval):
     return f"data/kl_seed{seed}_embd{n_embd}_layer{n_layer}_blk{block_size}_interval{kl_interval}.npz"
@@ -161,30 +106,28 @@ def build_infer_filename(seed, n_embd, n_layer, block_size, num_infer):
 def should_train(path):
     return not os.path.exists(path)
 
-def save_checkpoint(path, state_dict, uchars, BOS, n_layer, n_embd, block_size, n_head):
+def save_checkpoint(path, model, uchars, BOS, n_layer, n_embd, block_size, n_head):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    payload = {
+    torch.save({
         'config': {'n_layer': n_layer, 'n_embd': n_embd, 'block_size': block_size, 'n_head': n_head},
-        'tokenizer': {'uchars': uchars, 'BOS': BOS, 'vocab_size': len(uchars) + 1},
-        'weights': {k: [[p.data for p in row] for row in mat] for k, mat in state_dict.items()},
-    }
-    with open(path, 'w') as f:
-        json.dump(payload, f)
+        'tokenizer': {'uchars': uchars, 'BOS': BOS},
+        'model': model.state_dict(),
+    }, path)
 
-def load_checkpoint(path):
-    with open(path) as f:
-        payload = json.load(f)
+def load_checkpoint(path, device='cpu'):
+    payload = torch.load(path, map_location=device, weights_only=False)
     cfg = payload['config']
     tok = payload['tokenizer']
-    loaded_sd = {k: [[Value(v) for v in row] for row in mat] for k, mat in payload['weights'].items()}
-    # validate wte row width matches n_embd — catches config/weights mismatch
-    n_embd = cfg['n_embd']
-    if 'wte' in loaded_sd:
-        actual = len(loaded_sd['wte'][0])
-        if actual != n_embd:
-            raise ValueError(f"config says n_embd={n_embd} but 'wte' has row width {actual}")
-    loaded_params = [p for mat in loaded_sd.values() for row in mat for p in row]
-    return loaded_sd, loaded_params, tok['uchars'], tok['BOS'], cfg['n_layer'], cfg['n_embd'], cfg['block_size'], cfg['n_head']
+    n_layer_c, n_embd_c = cfg['n_layer'], cfg['n_embd']
+    block_size_c, n_head_c = cfg['block_size'], cfg['n_head']
+    uchars_c = tok['uchars']
+    BOS_c = tok['BOS']
+    vocab_size_c = len(uchars_c) + 1
+    model = GPT(vocab_size_c, n_embd_c, block_size_c, n_layer_c, n_head_c)
+    model.load_state_dict(payload['model'])
+    model.to(device)
+    return model, uchars_c, BOS_c, n_layer_c, n_embd_c, block_size_c, n_head_c
+
 
 # ---------------------------------------------------------------------------
 # Entry point: load checkpoint if available, otherwise train then save
@@ -200,8 +143,11 @@ if __name__ == "__main__":
                         help='compute KL divergence every INTERVAL steps (0=off, default=10)')
     parser.add_argument('--num_infer', type=int, default=20, metavar='N',
                         help='number of names to generate during inference (default: 20)')
+    parser.add_argument('--device', type=str, default='cpu',
+                        help='compute device: cpu, cuda, mps (default: cpu)')
     args = parser.parse_args()
     kl_interval = args.kl
+    device = args.device
 
     NGRAMS_PATH = "data/ngrams.npz"
     kl_path = build_kl_filename(seed, n_embd, n_layer, block_size, kl_interval)
@@ -217,17 +163,17 @@ if __name__ == "__main__":
     ckpt_path = build_filename(seed, n_embd, n_layer, block_size)
 
     if should_train(ckpt_path):
-        # Let there be Adam, the blessed optimizer and its buffers
+        model = GPT(vocab_size, n_embd, block_size, n_layer, n_head).to(device)
+        print(f"num params: {sum(p.numel() for p in model.parameters())}")
+
         learning_rate, beta1, beta2, eps_adam = 0.01, 0.85, 0.99, 1e-8
-        m = [0.0] * len(params) # first moment buffer
-        v = [0.0] * len(params) # second moment buffer
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,
+                                     betas=(beta1, beta2), eps=eps_adam)
 
-        # Repeat in sequence
-        num_steps = 1000 # number of training steps
+        num_steps = 1000
         kl_records = {1: [], 2: [], 3: [], 4: []}
-        for step in range(num_steps):
 
-            # Take single document, tokenize it, surround it with BOS special token on both sides
+        for step in range(num_steps):
             doc = docs[step % len(docs)]
             tokens = [BOS] + [uchars.index(ch) for ch in doc] + [BOS]
             n = min(block_size, len(tokens) - 1)
@@ -236,21 +182,29 @@ if __name__ == "__main__":
             if is_eval:
                 step_kl_positions = []
 
-            # Forward the token sequence through the model, building up the computation graph all the way to the loss
-            keys, values = [[] for _ in range(n_layer)], [[] for _ in range(n_layer)]
+            keys_c = [[] for _ in range(n_layer)]
+            vals_c = [[] for _ in range(n_layer)]
             losses = []
-            for pos_id in range(n):
-                token_id, target_id = tokens[pos_id], tokens[pos_id + 1]
-                logits = gpt(token_id, pos_id, keys, values)
-                probs = softmax(logits)
-                loss_t = -probs[target_id].log()
-                losses.append(loss_t)
-                if is_eval:
-                    step_kl_positions.append(kl_at_position(probs, tokens, pos_id, distributions))
-            loss = (1 / n) * sum(losses) # final average loss over the document sequence. May yours be low.
 
-            # Backward the loss, calculating the gradients with respect to all model parameters
+            for pos_id in range(n):
+                token_id_t, target_id = tokens[pos_id], tokens[pos_id + 1]
+                logits = model(token_id_t, pos_id, keys_c, vals_c)
+                probs = F.softmax(logits, dim=-1)
+                losses.append(-probs[target_id].log())
+                if is_eval:
+                    step_kl_positions.append(kl_at_position(
+                        probs.detach().cpu().numpy(), tokens, pos_id, distributions
+                    ))
+
+            loss = sum(losses) / n
+
+            optimizer.zero_grad()
             loss.backward()
+
+            lr_t = learning_rate * (1 - step / num_steps)
+            for pg in optimizer.param_groups:
+                pg['lr'] = lr_t
+            optimizer.step()
 
             if is_eval:
                 step_avg = average_kl(step_kl_positions)
@@ -258,19 +212,9 @@ if __name__ == "__main__":
                     if not math.isnan(val):
                         kl_records[order].append((step, val))
 
-            # Adam optimizer update: update the model parameters based on the corresponding gradients
-            lr_t = learning_rate * (1 - step / num_steps) # linear learning rate decay
-            for i, p in enumerate(params):
-                m[i] = beta1 * m[i] + (1 - beta1) * p.grad
-                v[i] = beta2 * v[i] + (1 - beta2) * p.grad ** 2
-                m_hat = m[i] / (1 - beta1 ** (step + 1))
-                v_hat = v[i] / (1 - beta2 ** (step + 1))
-                p.data -= lr_t * m_hat / (v_hat ** 0.5 + eps_adam)
-                p.grad = 0
+            print(f"step {step+1:4d} / {num_steps:4d} | loss {loss.item():.4f}", end='\r')
 
-            print(f"step {step+1:4d} / {num_steps:4d} | loss {loss.data:.4f}", end='\r')
-
-        save_checkpoint(ckpt_path, state_dict, uchars, BOS, n_layer, n_embd, block_size, n_head)
+        save_checkpoint(ckpt_path, model, uchars, BOS, n_layer, n_embd, block_size, n_head)
         print(f"\ncheckpoint saved → {ckpt_path}")
         if kl_interval > 0:
             save_kl_records(kl_path, kl_records)
@@ -279,30 +223,33 @@ if __name__ == "__main__":
         print(f"loading checkpoint from {ckpt_path}")
         if kl_interval > 0:
             print("Note: KL tracking only runs during training. Delete checkpoint to re-enable.")
-        state_dict, params, uchars, BOS, n_layer, n_embd, block_size, n_head = load_checkpoint(ckpt_path)
+        model, uchars, BOS, n_layer, n_embd, block_size, n_head = load_checkpoint(ckpt_path, device)
         head_dim = n_embd // n_head
         vocab_size = len(uchars) + 1
 
     # Inference: may the model babble back to us
     num_infer = args.num_infer
     infer_path = build_infer_filename(seed, n_embd, n_layer, block_size, num_infer)
-    temperature = 0.5 # in (0, 1], control the "creativity" of generated text, low to high
+    temperature = 0.5
     print("\n--- inference (new, hallucinated names) ---")
     generated = []
-    for sample_idx in range(num_infer):
-        keys, values = [[] for _ in range(n_layer)], [[] for _ in range(n_layer)]
-        token_id = BOS
-        sample = []
-        for pos_id in range(block_size):
-            logits = gpt(token_id, pos_id, keys, values)
-            probs = softmax([l / temperature for l in logits])
-            token_id = random.choices(range(vocab_size), weights=[p.data for p in probs])[0]
-            if token_id == BOS:
-                break
-            sample.append(uchars[token_id])
-        name = ''.join(sample)
-        generated.append(name)
-        print(f"sample {sample_idx+1:2d}: {name}")
+    model.eval()
+    with torch.no_grad():
+        for sample_idx in range(num_infer):
+            keys_c = [[] for _ in range(n_layer)]
+            vals_c = [[] for _ in range(n_layer)]
+            token_id = BOS
+            sample = []
+            for pos_id in range(block_size):
+                logits = model(token_id, pos_id, keys_c, vals_c)
+                probs = F.softmax(logits / temperature, dim=-1)
+                token_id = torch.multinomial(probs, num_samples=1).item()
+                if token_id == BOS:
+                    break
+                sample.append(uchars[token_id])
+            name = ''.join(sample)
+            generated.append(name)
+            print(f"sample {sample_idx+1:2d}: {name}")
 
     os.makedirs("data", exist_ok=True)
     with open(infer_path, 'w') as f:

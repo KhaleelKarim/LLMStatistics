@@ -10,7 +10,7 @@ def kl_divergence(p, q, eps=1e-8):
 
 
 def kl_at_position(p_model_values, tokens, pos_id, distributions, orders=(1, 2, 3, 4), eps=1e-8):
-    p = np.array([v.data for v in p_model_values])
+    p = np.asarray(p_model_values, dtype=np.float64)
     result = {}
     for order in orders:
         if pos_id < order - 2:
