@@ -12,7 +12,14 @@
       "Read(///wsl.localhost/Ubuntu//**)",
       "Read(///wsl.localhost/Ubuntu/home/khal/toolbox/LLMStatistics/data/**)",
       "Bash(file data/*.npz)",
-      "Bash(ls -la \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\khal\\\\toolbox\\\\\" 2>&1 || pwd)"
+      "Bash(ls -la \"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\khal\\\\toolbox\\\\\" 2>&1 || pwd)",
+      "Bash(git checkout *)",
+      "Bash(git config *)",
+      "Read(///wsl.localhost/Ubuntu/home/khal/toolbox/**)",
+      "Bash(uv add *)",
+      "Bash(git add *)",
+      "Bash(git rm *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
