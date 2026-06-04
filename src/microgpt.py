@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-seed = 42
+seed = 45
 random.seed(seed)
 torch.manual_seed(seed)
 
