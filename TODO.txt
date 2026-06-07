@@ -19,7 +19,8 @@ OUTPUT
 -Confirm what happens when temperature is approaching 0 or exactly 1
 
 PROMPT
--Is there any sort of prompt
+-Add the ability to prompt
+-What happens when the prompt is too long or there is a BOS in middle? (Never seen during training?)
 
 RECURSIVE BEHAVIOR
 -What if you feed your outputted names into the model to produce more names?
@@ -28,3 +29,6 @@ RECURSIVE BEHAVIOR
 
 DISTRIBUTIONS:
 -Compare input distribution, the distributions that the model understands (how it evolves over time), and the output distribution 
+
+MARKOV CHAIN:
+-Is there a state space we can use to model this as a markov chain?
