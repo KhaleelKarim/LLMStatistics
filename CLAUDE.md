@@ -24,18 +24,18 @@ uv run pytest tests/test_foo.py::test_name -v
 
 ## Architecture
 
-The core of this repo is `src/microgpt.py`: a single-file, dependency-free GPT implementation in pure Python (attributed to @karpathy). It is deliberately written without NumPy, PyTorch, or any numeric library — every operation runs on Python scalars.
+The core of this repo is `src/microgpt.py`: a PyTorch GPT implementation (ported from the pure-Python original attributed to @karpathy). It uses PyTorch for compute and autograd while preserving the same architecture choices.
 
-**Autograd (`Value`)** — A scalar-valued autograd engine. Each `Value` stores its data, gradient, children, and local gradients. `backward()` builds a topological sort of the computation graph and applies the chain rule in reverse.
-
-**Model** — GPT-2 style character-level transformer. Key architectural choices:
-- RMSNorm instead of LayerNorm
-- ReLU instead of GeLU  
+**Model (`GPT`)** — `nn.Module` subclass. GPT-2 style character-level transformer. Key architectural choices:
+- RMSNorm instead of LayerNorm (no learnable scale — standalone `rmsnorm()` function)
+- ReLU instead of GeLU
 - No biases anywhere
-- KV cache accumulated per forward pass (lists `keys`, `values` per layer)
+- KV cache accumulated per forward pass (lists `keys`, `values` per layer, same interface as original)
 - Token + positional embeddings summed, then RMSNorm applied before the first layer
 
-**Parameters** — All trainable parameters live in `state_dict`, a dict of named matrices of `Value` objects (`wte`, `wpe`, `lm_head`, and per-layer `attn_*`/`mlp_*`). The flat `params` list is a flattened view of `state_dict` that the optimizer iterates over; the two must stay in sync. Architecture shape is determined by the hyperparameters and frozen into the matrix dimensions. ~4192 params at default config.
+**Parameters** — All trainable parameters are `nn.Parameter` tensors registered via `setattr` in `GPT.__init__`. Access via `model.state_dict()` or `model.parameters()`. Layer names follow the convention `layer{i}_attn_wq`, `layer{i}_mlp_fc1`, etc. ~4192 params at default config.
+
+**Checkpoints** — Saved as `.pt` files via `torch.save` / `torch.load`. Format: `{'config': {...}, 'tokenizer': {...}, 'model': model.state_dict()}`. The `save_checkpoint` / `load_checkpoint` functions reconstruct the full `GPT` object from the saved config.
 
 **Hyperparameters** (top of file): `n_layer=1`, `n_embd=16`, `block_size=16`, `n_head=4`. Training runs Adam with linear LR decay for `num_steps=1000` steps over `data/input.txt` (character-level name data).
 
@@ -43,10 +43,10 @@ The core of this repo is `src/microgpt.py`: a single-file, dependency-free GPT i
 
 ## Conventions
 
-- **Stay dependency-free.** Do not add NumPy, PyTorch, or other numeric/ML libraries to `src/microgpt.py`. Pure-Python scalar math is the entire point. Standard-library modules (`json`, `os`, etc.) are fine. Test/dev-only dependencies (e.g. `pytest`) are fine in the dev group.
+- **`src/microgpt.py` uses PyTorch for compute.** Do not add other numeric/ML libraries to it. Standard-library modules (`os`, `math`, etc.) are fine. Test/dev-only dependencies (e.g. `pytest`) are fine in the dev group.
 - **TDD is required for non-exploratory code** (see `.skills` / project skills). Write a failing test first, watch it fail, then write minimal code to pass. This applies to persistence, tokenizer, and config plumbing — not to throwaway research notebooks.
-- **A checkpoint is weights + tokenizer + config**, not weights alone. Saving only `state_dict` floats is insufficient: the tokenizer (`uchars`/`BOS`/`vocab_size`) and shape config (`n_layer`/`n_embd`/`block_size`/`n_head`) must travel with the weights or loaded models produce garbage.
-- **Saved values are plain floats, not `Value` objects.** Strip to `.data` on save; re-wrap in `Value(...)` on load. Never serialize the computation graph (`_children`/`_local_grads`).
+- **A checkpoint is weights + tokenizer + config**, not weights alone. Saving only model weights is insufficient: the tokenizer (`uchars`/`BOS`) and shape config (`n_layer`/`n_embd`/`block_size`/`n_head`) must travel with the weights or loaded models produce garbage.
+- **Checkpoints are `.pt` files** written by `torch.save` and read by `torch.load`. The `save_checkpoint` / `load_checkpoint` functions in `microgpt.py` are the canonical interface.
 - **Importing `microgpt.py` must not trigger training.** Training/inference run under `if __name__ == "__main__":` so tests can import `save_checkpoint`/`load_checkpoint` etc. without a 1000-step training run.
 
 ## Layout
@@ -54,7 +54,7 @@ The core of this repo is `src/microgpt.py`: a single-file, dependency-free GPT i
 - `src/microgpt.py` — the model.
 - `tests/` — pytest suite.
 - `data/input.txt` — character-level name data (auto-downloaded if absent).
-- `checkpoints/` — saved models (filename encodes seed + n_embd + n_layer + block_size).
+- `checkpoints/` — saved models as `.pt` files (filename encodes seed + n_embd + n_layer + block_size).
 - `notebooks/` — exploratory research.
 
 ## Research focus (TODO.txt)
