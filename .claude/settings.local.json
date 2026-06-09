@@ -24,7 +24,11 @@
       "Bash(ls ~/.local/bin/uv ~/.cargo/bin/uv)",
       "Read(//c/Users/1khal/.local/bin/**)",
       "Bash(where uv.exe)",
-      "Bash(uv --version)"
+      "Bash(uv --version)",
+      "Bash(wc *)",
+      "Bash(cat *)",
+      "Bash(touch checkpoints/ckpt_seed75_embd16_layer1_blk16_step32000.pt)",
+      "Bash(echo \"exit=$?\")"
     ]
   }
 }
