@@ -143,7 +143,8 @@ if __name__ == "__main__":
                         help='RNG seed for shuffle, weight init, and sampling (default: 45)')
     args = parser.parse_args()
     kl_interval = args.kl
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
+    #device = torch.device("cuda" if torch.cuda.is_available() else "cpu") ADD AGAIN LATER IF MODEL IS MORE COMPLEX
 
     seed = args.seed
     random.seed(seed)
