@@ -117,14 +117,18 @@ def test_behavioral_fidelity(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_build_filename():
-    name = build_filename(seed=42, n_embd=16, n_layer=1, block_size=16)
+    name = build_filename(seed=42, n_embd=16, n_layer=1, block_size=16, step=1000)
     assert isinstance(name, str)
     assert name.endswith('.pt')
     assert '42' in name
+    assert 'step1000' in name
     assert name.startswith('checkpoints/')
 
-    other = build_filename(seed=42, n_embd=32, n_layer=2, block_size=8)
+    other = build_filename(seed=42, n_embd=32, n_layer=2, block_size=8, step=1000)
     assert name != other
+
+    different_step = build_filename(seed=42, n_embd=16, n_layer=1, block_size=16, step=500)
+    assert name != different_step
 
 # ---------------------------------------------------------------------------
 # Test 9: should_train returns True when no checkpoint exists, False when it does
