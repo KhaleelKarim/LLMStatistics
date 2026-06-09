@@ -23,7 +23,8 @@
       "Bash(command -v uv)",
       "Bash(ls ~/.local/bin/uv ~/.cargo/bin/uv)",
       "Read(//c/Users/1khal/.local/bin/**)",
-      "Bash(where uv.exe)"
+      "Bash(where uv.exe)",
+      "Bash(uv --version)"
     ]
   }
 }

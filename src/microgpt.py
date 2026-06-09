@@ -90,14 +90,14 @@ class GPT(nn.Module):
 # Checkpoint utilities
 # ---------------------------------------------------------------------------
 
-def build_filename(seed, n_embd, n_layer, block_size):
-    return f"checkpoints/ckpt_seed{seed}_embd{n_embd}_layer{n_layer}_blk{block_size}.pt"
+def build_filename(seed, n_embd, n_layer, block_size, step):
+    return f"checkpoints/ckpt_seed{seed}_embd{n_embd}_layer{n_layer}_blk{block_size}_step{step}.pt"
 
 def build_kl_filename(seed, n_embd, n_layer, block_size, kl_interval):
     return f"data/kl_seed{seed}_embd{n_embd}_layer{n_layer}_blk{block_size}_interval{kl_interval}.npz"
 
-def build_infer_filename(seed, n_embd, n_layer, block_size, num_infer):
-    return f"data/infer_seed{seed}_embd{n_embd}_layer{n_layer}_blk{block_size}_n{num_infer}.txt"
+def build_infer_filename(seed, n_embd, n_layer, block_size, num_infer, step):
+    return f"data/infer_seed{seed}_embd{n_embd}_layer{n_layer}_blk{block_size}_n{num_infer}_step{step}.txt"
 
 def should_train(path):
     return not os.path.exists(path)
@@ -125,6 +125,35 @@ def load_checkpoint(path, device='cpu'):
     return model, uchars_c, BOS_c, n_layer_c, n_embd_c, block_size_c, n_head_c
 
 
+def generate_samples(model, step, seed, uchars, BOS,
+                     n_layer, n_embd, block_size,
+                     num_infer, temperature):
+    infer_path = build_infer_filename(seed, n_embd, n_layer, block_size, num_infer, step)
+    was_training = model.training
+    model.eval()
+    generated = []
+    with torch.no_grad():
+        for _ in range(num_infer):
+            keys_c = [[] for _ in range(n_layer)]
+            vals_c = [[] for _ in range(n_layer)]
+            token_id = BOS
+            sample = []
+            for pos_id in range(block_size):
+                logits = model(token_id, pos_id, keys_c, vals_c)
+                probs = F.softmax(logits / temperature, dim=-1)
+                token_id = torch.multinomial(probs, num_samples=1).item()
+                if token_id == BOS:
+                    break
+                sample.append(uchars[token_id])
+            generated.append(''.join(sample))
+    if was_training:
+        model.train()
+    os.makedirs("data", exist_ok=True)
+    with open(infer_path, 'w') as f:
+        f.write('\n'.join(generated) + '\n')
+    print(f"\ninference output saved → {infer_path}")
+
+
 # ---------------------------------------------------------------------------
 # Entry point: load checkpoint if available, otherwise train then save
 # ---------------------------------------------------------------------------
@@ -136,13 +165,19 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--kl', type=int, default=0, metavar='INTERVAL',
-                        help='compute KL divergence every INTERVAL steps (0=off, default=10)')
+                        help='compute KL divergence every INTERVAL steps (0=off, default=0)')
     parser.add_argument('--num_infer', type=int, default=20, metavar='N',
                         help='number of names to generate during inference (default: 20)')
     parser.add_argument('--seed', type=int, default=45,
                         help='RNG seed for shuffle, weight init, and sampling (default: 45)')
+    parser.add_argument('--num_steps', type=int, default=1000,
+                        help='Number of steps to run training for (default: 1000)')
+    parser.add_argument('--train_interval', type=int, default=0,
+                        help='Interval for how often training is interrupted to calculate distributions (0=off, default: 0)')
     args = parser.parse_args()
     kl_interval = args.kl
+    train_interval = args.train_interval
+    num_steps = args.num_steps
     device = torch.device("cpu")
     #device = torch.device("cuda" if torch.cuda.is_available() else "cpu") ADD AGAIN LATER IF MODEL IS MORE COMPLEX
 
@@ -162,7 +197,7 @@ if __name__ == "__main__":
             print(f"KL tracking disabled: {NGRAMS_PATH} not found. Run: uv run python src/ngrams.py")
             kl_interval = 0
 
-    ckpt_path = build_filename(seed, n_embd, n_layer, block_size)
+    ckpt_path = build_filename(seed, n_embd, n_layer, block_size, num_steps)
 
     if should_train(ckpt_path):
         model = GPT(vocab_size, n_embd, block_size, n_layer, n_head).to(device)
@@ -173,12 +208,16 @@ if __name__ == "__main__":
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,
                                      betas=(beta1, beta2), eps=eps_adam)
 
-        num_steps = 1000
         kl_records = {1: [], 2: [], 3: [], 4: []}
 
         train_start = time.perf_counter() 
 
         for step in range(num_steps):
+            if train_interval > 0 and step % train_interval == 0:
+                generate_samples(model, step, seed, uchars, BOS,
+                                 n_layer, n_embd, block_size,
+                                 args.num_infer, 0.5)
+
             doc = docs[step % len(docs)]
             tokens = [BOS] + [uchars.index(ch) for ch in doc] + [BOS]
             n = min(block_size, len(tokens) - 1)
@@ -238,7 +277,7 @@ if __name__ == "__main__":
 
     # Inference: may the model babble back to us
     num_infer = args.num_infer
-    infer_path = build_infer_filename(seed, n_embd, n_layer, block_size, num_infer)
+    infer_path = build_infer_filename(seed, n_embd, n_layer, block_size, num_infer, num_steps)
     temperature = 0.5
     print(f"Using Device: {device} | Using Seed: {seed} | Temperature: {temperature}")
     print("\n--- inference (new, hallucinated names) ---")
