@@ -32,3 +32,10 @@ DISTRIBUTIONS:
 
 MARKOV CHAIN:
 -Is there a state space we can use to model this as a markov chain?
+
+
+PLANS:
+-Input distribution has already been tracked, now track distributions as we train and after training
+-Do this by taking a break every so often during training, generating 32,000 words, and computing distributions
+-Once the model is fully trained do this as well 
+-Use tmux or screen to keep this running, and also verify that GPU is speeding anything up at all

@@ -19,7 +19,11 @@
       "Bash(uv add *)",
       "Bash(git add *)",
       "Bash(git rm *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(command -v uv)",
+      "Bash(ls ~/.local/bin/uv ~/.cargo/bin/uv)",
+      "Read(//c/Users/1khal/.local/bin/**)",
+      "Bash(where uv.exe)"
     ]
   }
 }

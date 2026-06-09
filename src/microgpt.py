@@ -10,17 +10,13 @@ import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-seed = 45
-random.seed(seed)
-torch.manual_seed(seed)
+import time
 
 if not os.path.exists('data/input.txt'):
     import urllib.request
     names_url = 'https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt'
     urllib.request.urlretrieve(names_url, 'data/input.txt')
 docs = [line.strip() for line in open('data/input.txt') if line.strip()]
-random.shuffle(docs)
 print(f"num docs: {len(docs)}")
 
 uchars = sorted(set(''.join(docs)))
@@ -139,15 +135,20 @@ if __name__ == "__main__":
     from kl import kl_at_position, average_kl, save_kl_records
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--kl', type=int, default=10, metavar='INTERVAL',
+    parser.add_argument('--kl', type=int, default=0, metavar='INTERVAL',
                         help='compute KL divergence every INTERVAL steps (0=off, default=10)')
     parser.add_argument('--num_infer', type=int, default=20, metavar='N',
                         help='number of names to generate during inference (default: 20)')
-    parser.add_argument('--device', type=str, default='cpu',
-                        help='compute device: cpu, cuda, mps (default: cpu)')
+    parser.add_argument('--seed', type=int, default=45,
+                        help='RNG seed for shuffle, weight init, and sampling (default: 45)')
     args = parser.parse_args()
     kl_interval = args.kl
-    device = args.device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    seed = args.seed
+    random.seed(seed)
+    torch.manual_seed(seed)
+    random.shuffle(docs)
 
     NGRAMS_PATH = "data/ngrams.npz"
     kl_path = build_kl_filename(seed, n_embd, n_layer, block_size, kl_interval)
@@ -165,13 +166,16 @@ if __name__ == "__main__":
     if should_train(ckpt_path):
         model = GPT(vocab_size, n_embd, block_size, n_layer, n_head).to(device)
         print(f"num params: {sum(p.numel() for p in model.parameters())}")
-
+        print(f"Using Device: {device} | Using Seed: {seed} | KL Interval: {kl_interval}")
+        
         learning_rate, beta1, beta2, eps_adam = 0.01, 0.85, 0.99, 1e-8
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,
                                      betas=(beta1, beta2), eps=eps_adam)
 
         num_steps = 1000
         kl_records = {1: [], 2: [], 3: [], 4: []}
+
+        train_start = time.perf_counter() 
 
         for step in range(num_steps):
             doc = docs[step % len(docs)]
@@ -214,6 +218,10 @@ if __name__ == "__main__":
 
             print(f"step {step+1:4d} / {num_steps:4d} | loss {loss.item():.4f}", end='\r')
 
+        train_end = time.perf_counter()
+        train_time = train_end - train_start
+        print(f"Training Time: {train_time}")
+
         save_checkpoint(ckpt_path, model, uchars, BOS, n_layer, n_embd, block_size, n_head)
         print(f"\ncheckpoint saved → {ckpt_path}")
         if kl_interval > 0:
@@ -231,9 +239,11 @@ if __name__ == "__main__":
     num_infer = args.num_infer
     infer_path = build_infer_filename(seed, n_embd, n_layer, block_size, num_infer)
     temperature = 0.5
+    print(f"Using Device: {device} | Using Seed: {seed} | Temperature: {temperature}")
     print("\n--- inference (new, hallucinated names) ---")
     generated = []
     model.eval()
+    infer_start = time.perf_counter()
     with torch.no_grad():
         for sample_idx in range(num_infer):
             keys_c = [[] for _ in range(n_layer)]
@@ -250,7 +260,9 @@ if __name__ == "__main__":
             name = ''.join(sample)
             generated.append(name)
             print(f"sample {sample_idx+1:2d}: {name}")
-
+    infer_end = time.perf_counter()
+    infer_time = infer_end - infer_start
+    print(f"Inference Time: {infer_time}")
     os.makedirs("data", exist_ok=True)
     with open(infer_path, 'w') as f:
         f.write('\n'.join(generated) + '\n')
