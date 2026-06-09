@@ -133,7 +133,7 @@ def generate_samples(model, step, seed, uchars, BOS,
     model.eval()
     generated = []
     with torch.no_grad():
-        for _ in range(num_infer):
+        for i in range(num_infer):
             keys_c = [[] for _ in range(n_layer)]
             vals_c = [[] for _ in range(n_layer)]
             token_id = BOS
@@ -146,6 +146,7 @@ def generate_samples(model, step, seed, uchars, BOS,
                     break
                 sample.append(uchars[token_id])
             generated.append(''.join(sample))
+            print(f"Inference: {generated[-1]} Step: {i}/{num_infer}", end='\r')
     if was_training:
         model.train()
     os.makedirs("data", exist_ok=True)
